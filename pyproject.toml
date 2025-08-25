@@ -1,0 +1,13 @@
+[project]
+name = "hello-g"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "coqui-tts>=0.27.0",
+    "fastapi[standard]>=0.116.1",
+    "flax>=0.11.1",
+    "gradio>=5.43.1",
+    "numpy>=2.2.6",
+    "ollama>=0.5.3",
+    "torch>=2.8.0",
+]
