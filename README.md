@@ -6,3 +6,4 @@ run the app:
 uv run fastapi dev
 ```# ollama_chat
 # ollama_chat
+# ollama_chat
