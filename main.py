@@ -1,35 +1,31 @@
 from fastapi import FastAPI
 import gradio as gr
 import ollama
+from gradio import FileData
+from gradio.components.chatbot import ChatMessage
 
-from gradio import ChatMessage
+from utils.utils import image_to_base64
 
 app = FastAPI()
 
-# Modify the model to what you want
-model = "llama3"
-
-@app.get("/")
-def read_main():
-    return {"message": "This is your main app"}
-
-
-def sepia(input_img):
-    return input_img
-
 client = ollama.Client()
+model_list = ollama.list()
+model_names = [model['model'] for model in model_list['models']]
 
-def stream_chat(message: str, history: list, temperature: float, max_new_tokens: int, top_p: float, top_k: int,
-                penalty: float):
-    conversation = []
-    for prompt, answer in history:
-        conversation.extend([
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": answer},
-        ])
-    conversation.append({"role": "user", "content": message})
 
-    print(f"Conversation is -\n{conversation}")
+def stream_chat(message: dict | ChatMessage | None, history: list, img: str | None, temperature: float, max_new_tokens: int,
+                top_p: float, top_k: int,
+                penalty: float, model: str = 'llava'):
+    conversation = format_history(history, message)
+
+    if img is not None:
+        conversation.append(
+            {
+                "role": "user",
+                "content": "Describe this image:",
+                "images": [img]  # Replace with the actual image path
+            }
+        )
 
     response = client.chat(
         model=model,
@@ -47,34 +43,65 @@ def stream_chat(message: str, history: list, temperature: float, max_new_tokens:
 
     buffer = ""
     for chunk in response:
-        buffer += chunk["message"]["content"]
-        yield buffer
+        if 'message' in chunk and 'content' in chunk['message']:
+            buffer += chunk['message']['content']
+            yield buffer
 
 
-with gr.Blocks(theme=gr.themes.Soft(), css="footer {visibility: hidden}") as io:
-    with gr.Sidebar(position="left"):
-        gr.Markdown("# Advanced Options")
-        gr.Markdown("Use the options below to create advanced prompts")
-        top_k = gr.Slider(0.0,100.0, label="top_k", value=40, info="Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative. (Default: 40)")
-        top_p = gr.Slider(0.0,1.0, label="top_p", value=0.9, info=" Works together with top-k. A higher value (e.g., 0.95) will lead to more diverse text, while a lower value (e.g., 0.5) will generate more focused and conservative text. (Default: 0.9)")
-        temp = gr.Slider(0.0,2.0, label="temperature", value=0.8, info="The temperature of the model. Increasing the temperature will make the model answer more creatively. (Default: 0.8)")
+def format_history(history, message):
+    if message["text"] is not None:
+        history.append(ChatMessage(role="user", content=message["text"]))
+    elif len(message["files"]) >= 1:
+        history.append(ChatMessage(role="user", content="explain this"))
+    message_history = []
+    img_list = []
+    for single_msg in history:
+        if type(single_msg) is ChatMessage:  # ignoring the path in message_history for ollama
+            message_history.append({
+                "role": single_msg.role,
+                "content": single_msg.content
+            })
+    for file in message["files"]:
+        history.append(ChatMessage(role="user", content=FileData(path=file)))
+        img_b64 = image_to_base64(file)
+        img_list.append(f"{img_b64}")
+        message_history[-1]["images"] = img_list
+    return message_history
 
-    gr.Interface(
-        sepia,
-        gr.Image(label="input"),
-        gr.Image(label="output"),
-        title="LLM Image Chat",
-        description="Let's talk about the provided image.",
-        article="Ask about the image below?",
-        css="footer {visibility: hidden}",
-        flagging_mode="never"
+with gr.Blocks(
+        theme=gr.themes.Soft(),
+        css="""
+              footer {visibility: hidden}
+              #warning {background-color: green; text-align: center;}
+              """,
+        fill_height=True,
+) as io:
+    chatbot = gr.Chatbot(
+        label="Chatbot",
+        scale=1,
+        type="messages",
+        autoscroll=True,
     )
+
+    with gr.Sidebar():
+        gr.Markdown("""
+        Image Input
+        """)
+        image = gr.Image(type="filepath")
+
+    gr.Markdown("""
+    # Unclassified
+    """,
+                elem_id="warning", )
 
     gr.ChatInterface(
         stream_chat,
         type="messages",
+        chatbot=chatbot,
+        fill_height=True,
         additional_inputs_accordion=gr.Accordion(label="⚙️ Parameters", open=False, render=False),
         additional_inputs=[
+            image,
             gr.Slider(
                 minimum=0,
                 maximum=1,
@@ -82,6 +109,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css="footer {visibility: hidden}") as io:
                 value=0.8,
                 label="Temperature",
                 render=False,
+                info="The temperature of the model. Increasing the temperature will make the model answer more creatively. (Default: 0.8)",
             ),
             gr.Slider(
                 minimum=128,
@@ -97,6 +125,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css="footer {visibility: hidden}") as io:
                 step=0.1,
                 value=0.8,
                 label="top_p",
+                info=" Works together with top-k. A higher value (e.g., 0.95) will lead to more diverse text, while a lower value (e.g., 0.5) will generate more focused and conservative text. (Default: 0.9)",
                 render=False,
             ),
             gr.Slider(
@@ -105,6 +134,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css="footer {visibility: hidden}") as io:
                 step=1,
                 value=20,
                 label="top_k",
+                info="Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative. (Default: 40)",
                 render=False,
             ),
             gr.Slider(
@@ -115,9 +145,13 @@ with gr.Blocks(theme=gr.themes.Soft(), css="footer {visibility: hidden}") as io:
                 label="Repetition penalty",
                 render=False,
             ),
+            gr.Dropdown(
+                choices=model_names,
+                filterable=False,
+                label="Model",
+                render=False,
+            ),
         ],
     )
 
-
-
-app = gr.mount_gradio_app(app, io, path="/image")
+app = gr.mount_gradio_app(app, io, path="")
