@@ -1,33 +1,36 @@
 from fastapi import FastAPI
 import gradio as gr
 import ollama
-from transformers.pipelines.image_text_to_text import add_images_to_messages
 
 # Create the server
 app = FastAPI()
 
-# Create a client to talk to Ollama models
+# Create a client to talk to Ollama
 client = ollama.Client()
-# Create a list of available models
+# get a list of available models for the LLM
 model_list = ollama.list()
 model_names = [model['model'] for model in model_list['models']]
 
 
-def stream_chat(prompt: str | None, history: list, saved_images: list[str], temperature: float, max_new_tokens: int,
+def stream_chat(prompt: str | None, history: list, images: list[str], temperature: float, max_new_tokens: int,
                 top_p: float, top_k: int,
                 penalty: float, model: str = 'llava'):
     """
     Stream a llm response for the given message with the provided params and models to a gradio chatbot.
-    History is in the format:
-        [{"role": "user", "content": ("cat1.png")},{"role": "user", "content": ("cat2.png")},{"role": "user", "content": "What's the difference between these two images?"},]
-    inputs: [message, history, temperature, max_new_tokens, top_p, penalty, model]
-    outputs: [history]
+
+    Inputs: [prompt, history, images, temperature, max_new_tokens, top_p, penalty, model]
+    Outputs: [history]
     """
+
+    # add messages to history
     history.append({
         "role": "user",
         "content": prompt,
     })
 
+    # convert history to conversation format to send to the LLM.
+    # The LLM expects a list of messages in the format:
+    # [{"role": "system", "content": "", "images": [path.jpeg,]}, {"role": "user", "content": "What is the meaning of life?"}]
     conversation = [
         {"role": "system", "content": "You are a professional assistant."},
     ]
@@ -46,12 +49,12 @@ def stream_chat(prompt: str | None, history: list, saved_images: list[str], temp
                 "content": content["content"],
             })
 
-    if len(saved_images) > 0:
-        conversation = [*history, {"role": "user", "content": "", "images": saved_images}]
+    if len(images) > 0:
+        conversation = [*history, {"role": "user", "content": "", "images": images}]
     else:
         conversation = [*history, {"role": "user", "content": prompt}]
 
-    # Send the conversation off to the LLM with selected model and params
+    # Send the conversation off to the LLM with the selected model and params
     response = client.chat(
         model=model,
         messages=conversation,
@@ -73,7 +76,31 @@ def stream_chat(prompt: str | None, history: list, saved_images: list[str], temp
             yield buffer
 
 
-# [Gradio UI](https://www.gradio.app/docs/gradio/chatbot)
+def image_input():
+    # image input UI
+    gr.Markdown("""
+        Image Input
+        """)
+    image = gr.Image(type="filepath")
+
+    def add_images(img: str, save_images: list[str]):
+        if not img:
+            raise gr.Error("No Image to add")
+        return save_images + [img], gr.Image(value=None)
+
+    gr.Button("Save Image").click(fn=add_images, inputs=[image, saved_images], outputs=[saved_images, image])
+    gr.ClearButton(value="Clear Saved", components=[saved_images])
+
+    @gr.render(inputs=saved_images)
+    def show_images(imgs: list[str]):
+        if len(imgs) == 0:
+            gr.Markdown("## No Saved Images")
+        else:
+            for img in imgs:
+                gr.Image(type="filepath", value=img)
+
+
+# Gradio Chatbot UI https://www.gradio.app/docs/gradio/chatbot
 with gr.Blocks(
         theme=gr.themes.Soft(),
         css="""
@@ -82,7 +109,7 @@ with gr.Blocks(
               """,
         fill_height=True,
 ) as io:
-    images = gr.State([])
+    saved_images = gr.State([])  # Images saved by the user to ask the LLM about
     chatbot = gr.Chatbot(
         label="Chatbot",
         scale=1,
@@ -90,26 +117,9 @@ with gr.Blocks(
         autoscroll=True,
     )
 
+    # Sidebar for image input
     with gr.Sidebar():
-        gr.Markdown("""
-        Image Input
-        """)
-        image = gr.Image(type="filepath")
-
-        def add_images(img: str, save_images: list[str]):
-            if not img:
-                raise gr.Error("No Image to add")
-            return save_images + [img], gr.Image(value=None)
-
-        gr.Button("Save Image").click(fn=add_images, inputs=[image, images], outputs=[images, image])
-        gr.ClearButton(value="Clear Saved", components=[images])
-        @gr.render(inputs=images)
-        def show_images(imgs: list[str]):
-            if len(imgs) == 0:
-                gr.Markdown("## No Saved Images")
-            else:
-                for img in imgs:
-                    gr.Image(type="filepath", value=img)
+        image_input()
 
     gr.Markdown("""
     # Unclassified
@@ -128,7 +138,7 @@ with gr.Blocks(
         fill_height=True,
         additional_inputs_accordion=gr.Accordion(label="⚙️ Parameters", open=False, render=False),
         additional_inputs=[
-            images,
+            saved_images,
             # LLM Params
             gr.Slider(
                 minimum=0,
