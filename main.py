@@ -2,6 +2,8 @@ from fastapi import FastAPI
 import gradio as gr
 import ollama
 
+from image_to_base64 import image_to_base64
+
 # Create the server
 app = FastAPI()
 
@@ -50,7 +52,8 @@ def stream_chat(prompt: str | None, history: list, images: list[str], temperatur
             })
 
     if len(images) > 0:
-        conversation = [*history, {"role": "user", "content": "", "images": images}]
+        base64_images = map(image_to_base64, images) # python does not have good support for functional programming, but this will do
+        conversation = [*history, {"role": "user", "content": "", "images": base64_images}]
     else:
         conversation = [*history, {"role": "user", "content": prompt}]
 
@@ -75,31 +78,6 @@ def stream_chat(prompt: str | None, history: list, images: list[str], temperatur
             buffer += chunk['message']['content']
             yield buffer
 
-
-def image_input():
-    # image input UI
-    gr.Markdown("""
-        Image Input
-        """)
-    image = gr.Image(type="filepath")
-
-    def add_images(img: str, save_images: list[str]):
-        if not img:
-            raise gr.Error("No Image to add")
-        return save_images + [img], gr.Image(value=None)
-
-    gr.Button("Save Image").click(fn=add_images, inputs=[image, saved_images], outputs=[saved_images, image])
-    gr.ClearButton(value="Clear Saved", components=[saved_images])
-
-    @gr.render(inputs=saved_images)
-    def show_images(imgs: list[str]):
-        if len(imgs) == 0:
-            gr.Markdown("## No Saved Images")
-        else:
-            for img in imgs:
-                gr.Image(type="filepath", value=img)
-
-
 # Gradio Chatbot UI https://www.gradio.app/docs/gradio/chatbot
 with gr.Blocks(
         theme=gr.themes.Soft(),
@@ -119,7 +97,30 @@ with gr.Blocks(
 
     # Sidebar for image input
     with gr.Sidebar():
-        image_input()
+        # image input UI
+        gr.Markdown("""
+            Image Input
+            """)
+        image = gr.Image(type="filepath")
+
+
+        def add_images(img: str, save_images: list[str]):
+            if not img:
+                raise gr.Error("No Image to add")
+            return save_images + [img], gr.Image(value=None)
+
+
+        gr.Button("Save Image").click(fn=add_images, inputs=[image, saved_images], outputs=[saved_images, image])
+        gr.ClearButton(value="Clear Saved", components=[saved_images])
+
+
+        @gr.render(inputs=saved_images)
+        def show_images(imgs: list[str]):
+            if len(imgs) == 0:
+                gr.Markdown("## No Saved Images")
+            else:
+                for img in imgs:
+                    gr.Image(type="filepath", value=img)
 
     gr.Markdown("""
     # Unclassified
